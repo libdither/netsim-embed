@@ -77,6 +77,9 @@ impl Plug {
     ) {
         (self.tx, self.rx)
     }
+    pub fn join(tx: mpsc::UnboundedSender<Vec<u8>>, rx: mpsc::UnboundedReceiver<Vec<u8>>) -> Self {
+        Self {tx, rx}
+    }
 }
 
 pub fn wire() -> (Plug, Plug) {

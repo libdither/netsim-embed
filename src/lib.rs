@@ -1,8 +1,7 @@
 use async_process::Command;
 use futures::prelude::*;
 pub use libpacket::*;
-use netsim_embed_core::*;
-pub use netsim_embed_core::{DelayBuffer, Ipv4Range};
+pub use netsim_embed_core::{DelayBuffer, Ipv4Range, wire, Plug};
 pub use netsim_embed_machine::{unshare_user, Machine, MachineId, Namespace};
 use netsim_embed_nat::*;
 use netsim_embed_router::*;
@@ -25,7 +24,7 @@ enum Connector {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct NetworkId(usize);
+pub struct NetworkId(pub usize);
 
 impl NetworkId {
     fn id(&self) -> usize {
@@ -84,7 +83,7 @@ where
         };
         let id = MachineId(self.machines.len());
         let machine = Machine::new(id, plug_b, command).await;
-        self.machines.push(machine);
+        self.machines.push(machine.0);
         self.plugs.push(Connector::Unplugged(plug_a));
         id
     }
@@ -103,7 +102,7 @@ where
         id
     }
 
-    pub async fn plug(&mut self, machine: MachineId, net: NetworkId, addr: Option<Ipv4Addr>) {
+    pub async fn plug(&mut self, machine: MachineId, net: NetworkId, addr: Option<Ipv4Addr>, _delay: Option<DelayBuffer>) {
         if let Connector::Plugged(_) = self.plugs[machine.0] {
             log::debug!("Unplugging {}", machine);
             self.unplug(machine).await
@@ -134,7 +133,7 @@ where
         }
     }
 
-    pub fn add_route(&mut self, net_a: NetworkId, net_b: NetworkId) {
+    pub fn add_route(&mut self, net_a: NetworkId, net_b: NetworkId, _delay: Option<DelayBuffer>) {
         let (plug_a, plug_b) = wire();
         let range_a = self.networks[net_a.0].range;
         let range_b = self.networks[net_b.0].range;
@@ -194,7 +193,7 @@ pub struct Network {
 }
 
 impl Network {
-    fn new(id: NetworkId, range: Ipv4Range) -> Self {
+    pub fn new(id: NetworkId, range: Ipv4Range) -> Self {
         let router = Ipv4Router::new(range.gateway_addr());
         Self {
             id,

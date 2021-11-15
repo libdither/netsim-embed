@@ -21,11 +21,11 @@ use futures::channel::{mpsc, oneshot};
 use futures::future::FutureExt;
 use futures::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use futures::sink::SinkExt;
-use futures::stream::{FusedStream, StreamExt};
+use futures::stream::{StreamExt};
 use netsim_embed_core::{Ipv4Range, Packet, Plug};
-use std::collections::VecDeque;
 use std::fmt::{self, Display};
 use std::io::{Error, ErrorKind, Result, Write};
+use std::marker::PhantomData;
 use std::net::Ipv4Addr;
 use std::process::Stdio;
 use std::str::FromStr;
@@ -52,15 +52,14 @@ impl fmt::Display for MachineId {
 /// receives IP packets from the tx/rx channels and runs some UDP/TCP networking code in task.
 #[derive(Debug)]
 pub struct Machine<C, E> {
-    id: MachineId,
+    pub id: MachineId,
     addr: Ipv4Addr,
     mask: u8,
-    ns: Namespace,
+    pub ns: Namespace,
     ctrl: mpsc::UnboundedSender<IfaceCtrl>,
-    tx: mpsc::UnboundedSender<C>,
-    rx: mpsc::UnboundedReceiver<E>,
-    join: Option<thread::JoinHandle<Result<()>>>,
-    buffer: VecDeque<E>,
+    pub tx: mpsc::UnboundedSender<C>,
+    pub join: Option<thread::JoinHandle<Result<()>>>,
+    phantom_data: PhantomData<E>,
 }
 
 impl<C, E> Machine<C, E>
@@ -69,38 +68,35 @@ where
     E: FromStr + Send + 'static,
     E::Err: std::fmt::Debug + Display + Send + Sync,
 {
-    pub async fn new(id: MachineId, plug: Plug, cmd: Command) -> Self {
+    pub async fn new(id: MachineId, plug: Plug, cmd: Command) -> (Self, mpsc::UnboundedReceiver<E>) {
         let (ctrl_tx, ctrl_rx) = mpsc::unbounded();
         let (cmd_tx, cmd_rx) = mpsc::unbounded();
         let (event_tx, event_rx) = mpsc::unbounded();
         let (ns_tx, ns_rx) = oneshot::channel();
         let join = machine(id, plug, cmd, ctrl_rx, ns_tx, cmd_rx, event_tx);
-        let ns = ns_rx.await.unwrap();
-        Self {
+        let ns_res = ns_rx.await;        
+        
+        let ns = ns_res.unwrap_or(Namespace::current().unwrap());
+        ( Self {
             id,
             addr: Ipv4Addr::UNSPECIFIED,
             mask: 32,
             ns,
             ctrl: ctrl_tx,
             tx: cmd_tx,
-            rx: event_rx,
             join: Some(join),
-            buffer: VecDeque::new(),
-        }
+            phantom_data: PhantomData::default(),
+        }, event_rx)
     }
 }
 
 impl<C, E> Machine<C, E> {
-    pub fn id(&self) -> MachineId {
-        self.id
+    pub fn up(&self) {
+        self.ctrl.unbounded_send(IfaceCtrl::Up).unwrap();
     }
 
-    pub fn addr(&self) -> Ipv4Addr {
-        self.addr
-    }
-
-    pub fn mask(&self) -> u8 {
-        self.mask
+    pub fn down(&self) {
+        self.ctrl.unbounded_send(IfaceCtrl::Down).unwrap();
     }
 
     pub async fn set_addr(&mut self, addr: Ipv4Addr, mask: u8) {
@@ -111,88 +107,6 @@ impl<C, E> Machine<C, E> {
         rx.await.unwrap();
         self.addr = addr;
         self.mask = mask;
-    }
-
-    pub fn send(&self, cmd: C) {
-        self.tx.unbounded_send(cmd).unwrap();
-    }
-
-    pub async fn recv(&mut self) -> Option<E> {
-        if let Some(ev) = self.buffer.pop_front() {
-            Some(ev)
-        } else {
-            self.rx.next().await
-        }
-    }
-
-    pub async fn select<F, T>(&mut self, mut f: F) -> Option<T>
-    where
-        F: FnMut(&E) -> Option<T>,
-    {
-        if let Some((idx, res)) = self
-            .buffer
-            .iter()
-            .enumerate()
-            .find_map(|(idx, ev)| f(ev).map(|x| (idx, x)))
-        {
-            self.buffer.remove(idx);
-            return Some(res);
-        }
-        loop {
-            match self.rx.next().await {
-                Some(ev) => {
-                    if let Some(res) = f(&ev) {
-                        return Some(res);
-                    } else {
-                        self.buffer.push_back(ev);
-                    }
-                }
-                None => return None,
-            }
-        }
-    }
-
-    pub async fn select_draining<F, T>(&mut self, mut f: F) -> Option<T>
-    where
-        F: FnMut(&E) -> Option<T>,
-    {
-        while let Some(ev) = self.buffer.pop_front() {
-            if let Some(res) = f(&ev) {
-                return Some(res);
-            }
-        }
-        loop {
-            match self.rx.next().await {
-                Some(ev) => {
-                    if let Some(res) = f(&ev) {
-                        return Some(res);
-                    }
-                }
-                None => return None,
-            }
-        }
-    }
-
-    pub fn drain(&mut self) -> Vec<E> {
-        let mut res = self.buffer.drain(..).collect::<Vec<_>>();
-        if !self.rx.is_terminated() {
-            while let Ok(Some(x)) = self.rx.try_next() {
-                res.push(x);
-            }
-        }
-        res
-    }
-
-    pub fn up(&self) {
-        self.ctrl.unbounded_send(IfaceCtrl::Up).unwrap();
-    }
-
-    pub fn down(&self) {
-        self.ctrl.unbounded_send(IfaceCtrl::Down).unwrap();
-    }
-
-    pub fn namespace(&self) -> Namespace {
-        self.ns
     }
 }
 
@@ -218,9 +132,10 @@ where
     E: FromStr + Send + 'static,
     E::Err: std::fmt::Debug + Display + Send + Sync,
 {
+    println!("Run machine function");
     thread::spawn(move || {
         let ns = Namespace::unshare()?;
-        let _ = ns_tx.send(ns);
+        let _res = ns_tx.send(ns);
 
         let res = async_global_executor::block_on(async move {
             let iface = iface::Iface::new()?;
