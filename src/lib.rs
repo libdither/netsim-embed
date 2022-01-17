@@ -1,7 +1,7 @@
 use async_process::Command;
 use futures::prelude::*;
 pub use libpacket::*;
-pub use netsim_embed_core::{DelayBuffer, Ipv4Range, wire, Plug};
+pub use netsim_embed_core::{DelayBuffer, Ipv4Range, wire, Plug, Ipv4Route};
 pub use netsim_embed_machine::{unshare_user, Machine, MachineId, Namespace};
 use netsim_embed_nat::*;
 use netsim_embed_router::*;
@@ -188,7 +188,7 @@ where
 pub struct Network {
     id: NetworkId,
     range: Ipv4Range,
-    router: Ipv4Router,
+    pub router: Ipv4Router,
     device: u32,
 }
 
