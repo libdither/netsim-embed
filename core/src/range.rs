@@ -147,48 +147,6 @@ impl Ipv4Range {
         (base_addr ^ test_addr).leading_zeros() >= u32::from(self.bits)
     }
 
-    pub fn global_split(num: u32) -> impl Iterator<Item = Self> {
-        let global = Self::global();
-
-        let class = Ipv4AddrClass::Global;
-        // Takes, self, current iter, num found, and class. returns range, current iter, num found
-        fn find_next(range: Ipv4Range, mut n: u32, mut found: u32, class: Ipv4AddrClass) -> (Ipv4Range, u32, u32) {
-            let mut n_reversed = 0;
-            for i in 0..32 {
-                if n & (1 << i) != 0 {
-                    n_reversed |= 0x8000_0000u32 >> i;
-                }
-            }
-            let base_addr = u32::from(range.addr);
-            let ip = base_addr | (n_reversed >> range.bits);
-            let ip = Ipv4Addr::from(ip);
-
-            n += 1;
-            if Ipv4AddrClass::Global != ip.class() {
-                find_next(range, n, found, class)
-            } else {
-                found += 1;
-                (Ipv4Range { addr: ip, bits: 0 }, n, found)
-            }
-        }
-        let mut max_n = 0u32;
-        let mut found = 0u32;
-        loop {
-            let ret = find_next(global, max_n, found, class);
-            max_n = ret.1; found = ret.2;
-            if found >= num { break; }
-        }
-        let extra_bits = (32 - max_n.leading_zeros()) as u8;
-        let bits = global.bits + extra_bits;
-
-        let mut n = 0;
-        std::iter::from_fn(move || {
-            let (mut range, new_n, _) = find_next(global, n, 0, class);
-            n = new_n;
-            range.bits = bits; Some(range)
-        })
-    }
-
     /// Split a range into `num` sub-ranges
     ///
     /// # Panics
@@ -277,6 +235,68 @@ impl FromStr for Ipv4Range {
 impl From<Ipv4Addr> for Ipv4Range {
     fn from(addr: Ipv4Addr) -> Self {
         Self::new(addr, 32)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Ipv4RangeIter {
+    range: Ipv4Range,
+    iter: u32,
+    found: u32,
+    class: Ipv4AddrClass,
+    bits: u8,
+}
+impl Ipv4RangeIter {
+    pub fn new(num: u32) -> Self {
+        let global = Ipv4Range::global();
+
+        let class = Ipv4AddrClass::Global;
+        
+        let mut max_n = 0u32;
+        let mut found = 0u32;
+        loop {
+            let ret = Self::find_next(global, max_n, found, class);
+            max_n = ret.1; found = ret.2;
+            if found >= num { break; }
+        }
+        let extra_bits = (32 - max_n.leading_zeros()) as u8;
+        let bits = global.bits + extra_bits;
+
+        Ipv4RangeIter {
+            range: global,
+            iter: 0,
+            found: 0,
+            class,
+            bits,
+        }
+    }
+    fn find_next(range: Ipv4Range, mut n: u32, mut found: u32, class: Ipv4AddrClass) -> (Ipv4Range, u32, u32) {
+        let mut n_reversed = 0;
+        for i in 0..32 {
+            if n & (1 << i) != 0 {
+                n_reversed |= 0x8000_0000u32 >> i;
+            }
+        }
+        let base_addr = u32::from(range.addr);
+        let ip = base_addr | (n_reversed >> range.bits);
+        let ip = Ipv4Addr::from(ip);
+
+        n += 1;
+        if Ipv4AddrClass::Global != ip.class() {
+            Self::find_next(range, n, found, class)
+        } else {
+            found += 1;
+            (Ipv4Range { addr: ip, bits: 0 }, n, found)
+        }
+    }
+}
+impl Iterator for Ipv4RangeIter {
+    type Item = Ipv4Range;
+    // Takes, self, current iter, num found, and class. returns range, current iter, num found
+    fn next(&mut self) -> Option<Self::Item> {
+        let (value, new_iter, new_found) = Self::find_next(self.range, self.iter, self.found, self.class);
+        (self.iter, self.found) = (new_iter, new_found);
+        Some(value)
     }
 }
 
