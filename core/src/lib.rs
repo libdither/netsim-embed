@@ -2,6 +2,7 @@ use async_io::Timer;
 use futures::channel::mpsc;
 use futures::future::FutureExt;
 use futures::stream::{Stream, StreamExt};
+use serde::{Serialize, Deserialize};
 use std::collections::VecDeque;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
@@ -13,9 +14,9 @@ mod packet;
 mod range;
 
 pub use packet::{Packet, Protocol};
-pub use range::Ipv4Range;
+pub use range::{Ipv4Range, Ipv4RangeIter};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Ipv4Route {
     dest: Ipv4Range,
     gateway: Option<Ipv4Addr>,

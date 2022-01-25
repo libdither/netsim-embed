@@ -1,10 +1,11 @@
 use async_process::Command;
 use futures::prelude::*;
 pub use libpacket::*;
-pub use netsim_embed_core::{DelayBuffer, Ipv4Range, wire, Plug, Ipv4Route};
+pub use netsim_embed_core::{DelayBuffer, Ipv4Range, wire, Plug, Ipv4Route, Ipv4RangeIter};
 pub use netsim_embed_machine::{unshare_user, Machine, MachineId, Namespace};
 use netsim_embed_nat::*;
 use netsim_embed_router::*;
+pub use netsim_embed_router::Ipv4Router;
 use std::fmt::Display;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
