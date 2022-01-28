@@ -132,7 +132,7 @@ where
     E: FromStr + Send + 'static,
     E::Err: std::fmt::Debug + Display + Send + Sync,
 {
-    println!("Run machine function");
+    // println!("Run machine function");
     thread::spawn(move || {
         let ns = Namespace::unshare()?;
         let _res = ns_tx.send(ns);

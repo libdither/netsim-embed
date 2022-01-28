@@ -238,7 +238,7 @@ impl From<Ipv4Addr> for Ipv4Range {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Ipv4RangeIter {
     range: Ipv4Range,
     iter: u32,
