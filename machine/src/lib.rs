@@ -232,7 +232,7 @@ where
                 while let Some(ev) = stdout.next().await {
                     let ev = ev?;
                     if ev.starts_with('<') {
-                        let ev = match E::from_str(&ev) {
+                        let ev = match E::from_str(&ev[1..]) {
                             Ok(ev) => ev,
                             Err(err) => return Err(Error::new(ErrorKind::Other, err.to_string())),
                         };
