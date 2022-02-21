@@ -1,12 +1,12 @@
 use async_process::Command;
 use futures::prelude::*;
 pub use libpacket::*;
-pub use netsim_embed_core::{DelayBuffer, Ipv4Range, wire, Plug, Ipv4Route, Ipv4RangeIter};
+pub use netsim_embed_core::{DelayBuffer, Ipv4Range, wire, Plug, Ipv4Route, Ipv4RangeIter, Protocol};
 pub use netsim_embed_machine::{unshare_user, Machine, MachineId, Namespace};
 use netsim_embed_nat::*;
 pub use netsim_embed_router::Ipv4Router;
 use std::fmt::Display;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
 
 pub fn run<F>(f: F)
@@ -51,7 +51,7 @@ impl<C, E> Default for Netsim<C, E> {
 impl<C, E> Netsim<C, E>
 where
     C: Display + Send + 'static,
-    E: FromStr + Send + 'static,
+    E: FromStr + Display + Send + 'static,
     E::Err: std::fmt::Debug + Display + Send + Sync,
 {
     pub fn new() -> Self {
@@ -170,6 +170,9 @@ where
         nat.set_symmetric(config.symmetric);
         nat.set_blacklist_unrecognized_addrs(config.blacklist_unrecognized_addrs);
         nat.set_restrict_endpoints(config.restrict_endpoints);
+        for (protocol, port, local_addr) in config.forward_ports {
+            nat.forward_port(port, local_addr, protocol);
+        }
         async_global_executor::spawn(nat).detach();
         self.networks[public_net.0].router.add_connection(
             private_net.id(),
@@ -218,21 +221,11 @@ impl Network {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct NatConfig {
     pub hair_pinning: bool,
     pub symmetric: bool,
     pub blacklist_unrecognized_addrs: bool,
     pub restrict_endpoints: bool,
-}
-
-impl Default for NatConfig {
-    fn default() -> Self {
-        Self {
-            hair_pinning: false,
-            symmetric: false,
-            blacklist_unrecognized_addrs: false,
-            restrict_endpoints: false,
-        }
-    }
+    pub forward_ports: Vec<(Protocol, u16, SocketAddrV4)>,
 }

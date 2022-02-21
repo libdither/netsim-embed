@@ -6,7 +6,7 @@ use thiserror::Error;
 use serde::{Serialize, Deserialize};
 
 /// A range of IPv4 addresses with a common prefix
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Ipv4Range {
     addr: Ipv4Addr,
     bits: u8,

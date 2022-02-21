@@ -65,7 +65,7 @@ pub struct Machine<C, E> {
 impl<C, E> Machine<C, E>
 where
     C: Display + Send + 'static,
-    E: FromStr + Send + 'static,
+    E: FromStr + Display + Send + 'static,
     E::Err: std::fmt::Debug + Display + Send + Sync,
 {
     pub async fn new(id: MachineId, plug: Plug, cmd: Command) -> (Self, mpsc::UnboundedReceiver<E>) {
@@ -117,6 +117,34 @@ impl<C, E> Drop for Machine<C, E> {
     }
 }
 
+fn abbrev<T: Display>(t: &T, limit: usize, cut_len: usize) -> String {
+    use std::fmt::Write;
+    struct S(String, usize);
+    impl Write for S {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            self.1 += s.len();
+            let mut bytes = (self.0.capacity() - self.0.len()).min(s.len());
+            while !s.is_char_boundary(bytes) {
+                bytes -= 1;
+            }
+            self.0.push_str(&s[..bytes]);
+            Ok(())
+        }
+    }
+    let mut writer = S(String::with_capacity(limit), 0);
+    write!(writer, "{}", t).unwrap();
+    let S(mut result, length) = writer;
+    if length > limit {
+        let mut cut = cut_len;
+        while !result.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        result.truncate(cut);
+        write!(&mut result, "... ({} bytes)", length).unwrap();
+    }
+    result
+}
+
 #[allow(clippy::too_many_arguments)]
 fn machine<C, E>(
     id: MachineId,
@@ -129,13 +157,12 @@ fn machine<C, E>(
 ) -> thread::JoinHandle<Result<()>>
 where
     C: Display + Send + 'static,
-    E: FromStr + Send + 'static,
+    E: FromStr + Display + Send + 'static,
     E::Err: std::fmt::Debug + Display + Send + Sync,
 {
     // println!("Run machine function");
     thread::spawn(move || {
         let ns = Namespace::unshare()?;
-        let _res = ns_tx.send(ns);
 
         let res = async_global_executor::block_on(async move {
             let iface = iface::Iface::new()?;
@@ -144,6 +171,7 @@ where
 
             let ctrl_task = async {
                 while let Some(ctrl) = ctrl.next().await {
+                    log::debug!("{} CTRL {:?}", id, ctrl);
                     match ctrl {
                         IfaceCtrl::Up => iface.get_ref().put_up()?,
                         IfaceCtrl::Down => iface.get_ref().put_down()?,
@@ -175,7 +203,7 @@ where
                     if buf[0] >> 4 != 4 {
                         continue;
                     }
-                    log::debug!("{} (reader): sending packet", id);
+                    log::trace!("{} (reader): sending packet", id);
                     let mut bytes = buf[..n].to_vec();
                     if let Some(mut packet) = Packet::new(&mut bytes) {
                         packet.set_checksum();
@@ -192,7 +220,7 @@ where
 
             let writer_task = async {
                 while let Some(packet) = rx.next().await {
-                    log::debug!("{} (writer): received packet", id);
+                    log::trace!("{} (writer): received packet", id);
                     // can error if the interface is down
                     if let Ok(n) = iface.write_with(|iface| iface.send(&packet)).await {
                         if n == 0 {
@@ -209,7 +237,10 @@ where
             bin.stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let mut child = bin.spawn()?;
+            let mut child = bin.spawn().map_err(|e| {
+                log::error!("cannot start machine {:?}: {}", bin, e);
+                e
+            })?;
             let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines().fuse();
             let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines().fuse();
             let mut stdin = child.stdin.take().unwrap();
@@ -218,7 +249,7 @@ where
                 let mut buf = Vec::with_capacity(4096);
                 while let Some(cmd) = cmd.next().await {
                     buf.clear();
-                    log::trace!("{}", cmd);
+                    log::debug!("{} {}", id, abbrev(&cmd, 2000, 80));
                     writeln!(buf, "{}", cmd)?;
                     stdin.write_all(&buf).await?;
                 }
@@ -236,6 +267,7 @@ where
                             Ok(ev) => ev,
                             Err(err) => return Err(Error::new(ErrorKind::Other, err.to_string())),
                         };
+                        log::debug!("{} {}", id, abbrev(&ev, 2000, 80));
                         if event.unbounded_send(ev).is_err() {
                             break;
                         }
@@ -259,6 +291,9 @@ where
             }
             .fuse();
             futures::pin_mut!(stderr_task);
+
+            // unblock here so that possible exec error has a chance to get out
+            let _ = ns_tx.send(ns);
 
             futures::select! {
                 res = ctrl_task => res?,
