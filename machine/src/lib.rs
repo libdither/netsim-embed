@@ -108,6 +108,103 @@ impl<C, E> Machine<C, E> {
         self.addr = addr;
         self.mask = mask;
     }
+
+    pub fn send(&self, cmd: C) {
+        self.tx.unbounded_send(cmd).unwrap();
+    }
+    pub async fn send_blocking(&mut self, cmd: C) {
+        self.tx.send(cmd).await.unwrap()
+    }
+
+    pub fn drain(&mut self) -> Vec<E> {
+        let mut res = self.buffer.drain(..).collect::<Vec<_>>();
+        if !self.rx.is_terminated() {
+            while let Ok(Some(x)) = self.rx.try_next() {
+                res.push(x);
+            }
+        }
+        res
+    }
+
+    pub fn up(&self) {
+        self.ctrl.unbounded_send(IfaceCtrl::Up).unwrap();
+    }
+
+    pub fn down(&self) {
+        self.ctrl.unbounded_send(IfaceCtrl::Down).unwrap();
+    }
+
+    pub fn namespace(&self) -> Namespace {
+        self.ns
+    }
+
+    pub async fn recv(&mut self) -> Option<E> {
+        if let Some(ev) = self.buffer.pop_front() {
+            Some(ev)
+        } else {
+            self.rx.next().await
+        }
+    }
+
+    pub async fn select<F, T>(&mut self, mut f: F) -> Option<T>
+    where
+        F: FnMut(&E) -> Option<T>,
+    {
+        if let Some((idx, res)) = self
+            .buffer
+            .iter()
+            .enumerate()
+            .find_map(|(idx, ev)| f(ev).map(|x| (idx, x)))
+        {
+            self.buffer.remove(idx);
+            return Some(res);
+        }
+        loop {
+            match self.rx.next().await {
+                Some(ev) => {
+                    if let Some(res) = f(&ev) {
+                        return Some(res);
+                    } else {
+                        self.buffer.push_back(ev);
+                    }
+                }
+                None => return None,
+            }
+        }
+    }
+
+    pub async fn select_draining<F, T>(&mut self, mut f: F) -> Option<T>
+    where
+        F: FnMut(E) -> Option<T>,
+    {
+        while let Some(ev) = self.buffer.pop_front() {
+            if let Some(res) = f(ev) {
+                return Some(res);
+            }
+        }
+        loop {
+            match self.rx.next().await {
+                Some(ev) => {
+                    if let Some(res) = f(ev) {
+                        return Some(res);
+                    }
+                }
+                None => return None,
+            }
+        }
+    }
+
+    pub fn drain_matching<F: FnMut(&E) -> bool>(&mut self, mut f: F) -> Vec<E> {
+        let mut ret = Vec::new();
+        for e in std::mem::take(&mut self.buffer) {
+            if f(&e) {
+                ret.push(e);
+            } else {
+                self.buffer.push_back(e);
+            }
+        }
+        ret
+    }
 }
 
 impl<C, E> Drop for Machine<C, E> {
@@ -163,6 +260,7 @@ where
     // println!("Run machine function");
     thread::spawn(move || {
         let ns = Namespace::unshare()?;
+        log::info!("created network namespace for {:?}: {}", id, ns);
 
         let res = async_global_executor::block_on(async move {
             let iface = iface::Iface::new()?;

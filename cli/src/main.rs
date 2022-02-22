@@ -20,7 +20,7 @@ fn main() {
     env_logger::init();
     run(async {
         let opts = Opts::from_args();
-        let mut sim = Netsim::new();
+        let mut sim = Netsim::<Command, Event>::new();
         let public = sim.spawn_network(Ipv4Range::global().split(2)[0]);
         let server_addr = sim.network_mut(public).unique_addr();
         let delay = opts.delay_ms.map(|delay| {
@@ -55,16 +55,14 @@ fn main() {
         let server = &mut server[0];
         let client = &mut client[0];
         server.send(Command::Start);
-        loop {
-            if server.recv().await == Some(Event::Started) {
-                break;
-            }
-        }
         client.send(Command::Start);
-        loop {
-            if client.recv().await == Some(Event::Started) {
-                break;
-            }
+        while let Some(event) = server.recv().await {
+            if event == Event::Finished { server.send(Command::Exit); }
+            println!("server event: {:?}", event);
+        }
+        while let Some(event) = client.recv().await {
+            // if event == Event::Finished { client.send(Command::Exit); }
+            println!("client event: {:?}", event);
         }
     });
 }
