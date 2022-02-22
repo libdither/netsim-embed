@@ -25,7 +25,6 @@ use futures::stream::{StreamExt};
 use netsim_embed_core::{Ipv4Range, Packet, Plug};
 use std::fmt::{self, Display};
 use std::io::{Error, ErrorKind, Result, Write};
-use std::marker::PhantomData;
 use std::net::Ipv4Addr;
 use std::process::Stdio;
 use std::str::FromStr;
@@ -59,7 +58,7 @@ pub struct Machine<C, E> {
     ctrl: mpsc::UnboundedSender<IfaceCtrl>,
     pub tx: mpsc::UnboundedSender<C>,
     pub join: Option<thread::JoinHandle<Result<()>>>,
-    phantom_data: PhantomData<E>,
+    maybe_rx: Option<mpsc::UnboundedReceiver<E>>,
 }
 
 impl<C, E> Machine<C, E>
@@ -68,7 +67,7 @@ where
     E: FromStr + Display + Send + 'static,
     E::Err: std::fmt::Debug + Display + Send + Sync,
 {
-    pub async fn new(id: MachineId, plug: Plug, cmd: Command) -> (Self, mpsc::UnboundedReceiver<E>) {
+    pub async fn new(id: MachineId, plug: Plug, cmd: Command) -> Self {
         let (ctrl_tx, ctrl_rx) = mpsc::unbounded();
         let (cmd_tx, cmd_rx) = mpsc::unbounded();
         let (event_tx, event_rx) = mpsc::unbounded();
@@ -77,7 +76,7 @@ where
         let ns_res = ns_rx.await;        
         
         let ns = ns_res.unwrap_or(Namespace::current().unwrap());
-        ( Self {
+        Self {
             id,
             addr: Ipv4Addr::UNSPECIFIED,
             mask: 32,
@@ -85,8 +84,12 @@ where
             ctrl: ctrl_tx,
             tx: cmd_tx,
             join: Some(join),
-            phantom_data: PhantomData::default(),
-        }, event_rx)
+            maybe_rx: Some(event_rx),
+        }
+    }
+    pub fn take_rx(mut self) -> (Self, mpsc::UnboundedReceiver<E>) {
+        let rx = self.maybe_rx.take().expect("Expected receiver");
+        (self, rx)
     }
 }
 
@@ -116,94 +119,13 @@ impl<C, E> Machine<C, E> {
         self.tx.send(cmd).await.unwrap()
     }
 
-    pub fn drain(&mut self) -> Vec<E> {
-        let mut res = self.buffer.drain(..).collect::<Vec<_>>();
-        if !self.rx.is_terminated() {
-            while let Ok(Some(x)) = self.rx.try_next() {
-                res.push(x);
-            }
-        }
-        res
-    }
-
-    pub fn up(&self) {
-        self.ctrl.unbounded_send(IfaceCtrl::Up).unwrap();
-    }
-
-    pub fn down(&self) {
-        self.ctrl.unbounded_send(IfaceCtrl::Down).unwrap();
-    }
-
     pub fn namespace(&self) -> Namespace {
         self.ns
     }
 
     pub async fn recv(&mut self) -> Option<E> {
-        if let Some(ev) = self.buffer.pop_front() {
-            Some(ev)
-        } else {
-            self.rx.next().await
-        }
-    }
-
-    pub async fn select<F, T>(&mut self, mut f: F) -> Option<T>
-    where
-        F: FnMut(&E) -> Option<T>,
-    {
-        if let Some((idx, res)) = self
-            .buffer
-            .iter()
-            .enumerate()
-            .find_map(|(idx, ev)| f(ev).map(|x| (idx, x)))
-        {
-            self.buffer.remove(idx);
-            return Some(res);
-        }
-        loop {
-            match self.rx.next().await {
-                Some(ev) => {
-                    if let Some(res) = f(&ev) {
-                        return Some(res);
-                    } else {
-                        self.buffer.push_back(ev);
-                    }
-                }
-                None => return None,
-            }
-        }
-    }
-
-    pub async fn select_draining<F, T>(&mut self, mut f: F) -> Option<T>
-    where
-        F: FnMut(E) -> Option<T>,
-    {
-        while let Some(ev) = self.buffer.pop_front() {
-            if let Some(res) = f(ev) {
-                return Some(res);
-            }
-        }
-        loop {
-            match self.rx.next().await {
-                Some(ev) => {
-                    if let Some(res) = f(ev) {
-                        return Some(res);
-                    }
-                }
-                None => return None,
-            }
-        }
-    }
-
-    pub fn drain_matching<F: FnMut(&E) -> bool>(&mut self, mut f: F) -> Vec<E> {
-        let mut ret = Vec::new();
-        for e in std::mem::take(&mut self.buffer) {
-            if f(&e) {
-                ret.push(e);
-            } else {
-                self.buffer.push_back(e);
-            }
-        }
-        ret
+        if let Some(rx) = &mut self.maybe_rx { rx.next().await }
+        else { None }
     }
 }
 

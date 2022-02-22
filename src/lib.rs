@@ -83,7 +83,7 @@ where
         };
         let id = MachineId(self.machines.len());
         let machine = Machine::new(id, plug_b, command).await;
-        self.machines.push(machine.0);
+        self.machines.push(machine);
         self.plugs.push(Connector::Unplugged(plug_a));
         id
     }
@@ -102,7 +102,7 @@ where
         id
     }
 
-    pub async fn plug(&mut self, machine: MachineId, net: NetworkId, addr: Option<Ipv4Addr>, _delay: Option<DelayBuffer>) {
+    pub async fn plug(&mut self, machine: MachineId, net: NetworkId, addr: Option<Ipv4Addr>) {
         if let Connector::Plugged(_) = self.plugs[machine.0] {
             log::debug!("Unplugging {}", machine);
             self.unplug(machine).await
@@ -133,7 +133,7 @@ where
         }
     }
 
-    pub fn add_route(&mut self, net_a: NetworkId, net_b: NetworkId, _delay: Option<DelayBuffer>) {
+    pub fn add_route(&mut self, net_a: NetworkId, net_b: NetworkId) {
         let (plug_a, plug_b) = wire();
         let range_a = self.networks[net_a.0].range;
         let range_b = self.networks[net_b.0].range;
