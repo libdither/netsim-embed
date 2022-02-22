@@ -25,7 +25,6 @@ use futures::stream::{StreamExt};
 use netsim_embed_core::{Ipv4Range, Packet, Plug};
 use std::fmt::{self, Display};
 use std::io::{Error, ErrorKind, Result, Write};
-use std::marker::PhantomData;
 use std::net::Ipv4Addr;
 use std::process::Stdio;
 use std::str::FromStr;
@@ -59,7 +58,7 @@ pub struct Machine<C, E> {
     ctrl: mpsc::UnboundedSender<IfaceCtrl>,
     pub tx: mpsc::UnboundedSender<C>,
     pub join: Option<thread::JoinHandle<Result<()>>>,
-    phantom_data: PhantomData<E>,
+    maybe_rx: Option<mpsc::UnboundedReceiver<E>>,
 }
 
 impl<C, E> Machine<C, E>
@@ -68,7 +67,7 @@ where
     E: FromStr + Display + Send + 'static,
     E::Err: std::fmt::Debug + Display + Send + Sync,
 {
-    pub async fn new(id: MachineId, plug: Plug, cmd: Command) -> (Self, mpsc::UnboundedReceiver<E>) {
+    pub async fn new(id: MachineId, plug: Plug, cmd: Command) -> Self {
         let (ctrl_tx, ctrl_rx) = mpsc::unbounded();
         let (cmd_tx, cmd_rx) = mpsc::unbounded();
         let (event_tx, event_rx) = mpsc::unbounded();
@@ -77,7 +76,7 @@ where
         let ns_res = ns_rx.await;        
         
         let ns = ns_res.unwrap_or(Namespace::current().unwrap());
-        ( Self {
+        Self {
             id,
             addr: Ipv4Addr::UNSPECIFIED,
             mask: 32,
@@ -85,8 +84,12 @@ where
             ctrl: ctrl_tx,
             tx: cmd_tx,
             join: Some(join),
-            phantom_data: PhantomData::default(),
-        }, event_rx)
+            maybe_rx: Some(event_rx),
+        }
+    }
+    pub fn take_rx(mut self) -> (Self, mpsc::UnboundedReceiver<E>) {
+        let rx = self.maybe_rx.take().expect("Expected receiver");
+        (self, rx)
     }
 }
 
@@ -107,6 +110,22 @@ impl<C, E> Machine<C, E> {
         rx.await.unwrap();
         self.addr = addr;
         self.mask = mask;
+    }
+
+    pub fn send(&self, cmd: C) {
+        self.tx.unbounded_send(cmd).unwrap();
+    }
+    pub async fn send_blocking(&mut self, cmd: C) {
+        self.tx.send(cmd).await.unwrap()
+    }
+
+    pub fn namespace(&self) -> Namespace {
+        self.ns
+    }
+
+    pub async fn recv(&mut self) -> Option<E> {
+        if let Some(rx) = &mut self.maybe_rx { rx.next().await }
+        else { None }
     }
 }
 
@@ -163,6 +182,7 @@ where
     // println!("Run machine function");
     thread::spawn(move || {
         let ns = Namespace::unshare()?;
+        log::info!("created network namespace for {:?}: {}", id, ns);
 
         let res = async_global_executor::block_on(async move {
             let iface = iface::Iface::new()?;

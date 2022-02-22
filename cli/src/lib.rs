@@ -5,12 +5,14 @@ use std::net::Ipv4Addr;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
     Start,
+    Exit,
 }
 
 impl std::fmt::Display for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::Start => write!(f, ">start")?,
+            Self::Exit => write!(f, ">exit")?,
         }
         Ok(())
     }
@@ -22,6 +24,7 @@ impl std::str::FromStr for Command {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             ">start" => Self::Start,
+            ">exit" => Self::Exit,
             _ => return Err(anyhow!("invalid command")),
         })
     }
@@ -29,13 +32,13 @@ impl std::str::FromStr for Command {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Event {
-    Started,
+    Finished,
 }
 
 impl std::fmt::Display for Event {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::Started => write!(f, "<started")?,
+            Self::Finished => write!(f, "<finished")?,
         }
         Ok(())
     }
@@ -46,7 +49,7 @@ impl std::str::FromStr for Event {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
-            "<started" => Self::Started,
+            "<finished" => Self::Finished,
             _ => return Err(anyhow!("invalid event")),
         })
     }
@@ -69,28 +72,33 @@ pub trait Client {
 }
 
 pub async fn run_server<S: Server>() -> Result<()> {
+    // Consume start command
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     let mut server = S::start().await?;
-    println!("{}", Event::Started);
 
     server.run().await?;
 
+    server.exit().await?;
+
+    println!("{}", Event::Finished); // Notify finished
+    // Consume exit command
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
-    server.exit().await?;
     Ok(())
 }
 
 pub async fn run_client<C: Client>(mut client: C) -> Result<()> {
     let addr: Ipv4Addr = std::env::args().nth(1).unwrap().parse()?;
 
+    // Consume start command
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
-    println!("{}", Event::Started);
 
     client.run(addr).await?;
 
+    println!("{}", Event::Finished); // Notify finished
+    // Consume exit command
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     Ok(())
