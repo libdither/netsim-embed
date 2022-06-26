@@ -2,7 +2,7 @@
 name = "netsim-embed-nat"
 version = "0.4.1"
 authors = ["David Craven <david@craven.ch>"]
-edition = "2018"
+edition = "2021"
 description = "Implementation of a nat for netsim embed."
 license = "MIT"
 repository = "https://github.com/ipfs-rust/netsim-embed"

@@ -2,7 +2,7 @@
 name = "netsim-embed-core"
 version = "0.4.2"
 authors = ["David Craven <david@craven.ch>"]
-edition = "2018"
+edition = "2021"
 description = "Core types for netsim embed."
 license = "MIT"
 repository = "https://github.com/ipfs-rust/netsim-embed"
